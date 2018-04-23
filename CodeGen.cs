@@ -193,6 +193,14 @@ public class CodeGenerator {
       LoadIndexedLocalValue(register, index, name);
    }
 
+// method to generate ARM assembly laguage code to load local 2dindexed variable
+   public void LoadTwoIndexedLocal(int register,int llDelta, int offset, int indexOne, int indexTwo, int innerSize, string name) {
+      LoadIndexedLocalAddress(llDelta, offset);
+      Console.WriteLine("    MUL     R7, R{0}, #{1} ;idx = outerindex*innerSize", indexOne, innerSize);
+      Console.WriteLine("    ADD     R{0}, R{0}, R7 ; idx = idx + innerIndex;", indexTwo);
+      LoadIndexedLocalValue(register, indexTwo, name);
+   }
+
 // method to generate ARM assembly laguage code to store local indexed variable's value
    public void StoreIndexedLocalValue(int register, int index, string name) {
    // array elements are four bytes long
@@ -203,6 +211,14 @@ public class CodeGenerator {
    public void StoreIndexedLocal(int register, int llDelta, int offset, int index, string name) {
       LoadIndexedLocalAddress(llDelta, offset);
       StoreIndexedLocalValue(register, index, name);
+   }
+
+// method to generate ARM assembly laguage code to store global 2dindexed variable
+   public void StoreTwoIndexedLocal(int register,int llDelta, int offset, int indexOne, int indexTwo, int innerSize, string name) {
+      LoadIndexedLocalAddress(llDelta, offset);
+      Console.WriteLine("    MUL     R7, R{0}, #{1} ;idx = outerindex*innerSize", indexOne, innerSize);
+      Console.WriteLine("    ADD     R{0}, R{0}, R7 ; idx = idx + innerIndex;", indexTwo);
+      StoreIndexedLocalValue(register, indexTwo, name);
    }
 
 // method to generate ARM assembly laguage code to load global variable's address
@@ -252,7 +268,13 @@ public class CodeGenerator {
       LoadIndexedGlobalAddress(address);
       LoadIndexedGlobalValue(register, index, name);
    }
-
+// method to generate ARM assembly laguage code to load global 2dindexed variable
+   public void LoadTwoIndexedGlobal(int register, int address, int indexOne, int indexTwo, int innerSize, string name) {
+      LoadIndexedGlobalAddress(address);
+      Console.WriteLine("    MUL     R7, R{0}, #{1} ;idx = outerindex*innerSize", indexOne, innerSize);
+      Console.WriteLine("    ADD     R{0}, R{0}, R7 ; idx = idx + innerIndex;", indexTwo);
+      LoadIndexedGlobalValue(register, indexTwo, name);
+   }
 // method to generate ARM assembly laguage code to store indexed global variable' value
    public void StoreIndexedGlobalValue(int register, int index, string name) {
    // R4 holds base address for globals, scalar variables and array elements are four bytes long
@@ -263,6 +285,14 @@ public class CodeGenerator {
    public void StoreIndexedGlobal(int register, int address, int index, string name) {
       LoadIndexedGlobalAddress(address);
       StoreIndexedGlobalValue(register, index, name);
+   }
+ 
+// method to generate ARM assembly laguage code to store global 2dindexed variable
+   public void StoreTwoIndexedGlobal(int register, int address, int indexOne, int indexTwo, int innerSize, string name) {
+      LoadIndexedGlobalAddress(address);
+      Console.WriteLine("    MUL     R7, R{0}, #{1} ;idx = outerindex*innerSize", indexOne, innerSize);
+      Console.WriteLine("    ADD     R{0}, R{0}, R7 ; idx = idx + innerIndex;", indexTwo);
+      StoreIndexedGlobalValue(register, indexTwo, name);
    }
 
 // method to generate ARM assembly language code for relop
