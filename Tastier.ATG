@@ -1,0 +1,715 @@
+COMPILER Tastier
+
+   const int // object kinds
+      var = 0, proc = 1, constant = 3;
+
+   const int // types
+      undef = 0, integer = 1, boolean = 2;
+
+   const int // sort
+      scalar = 0, arrayOne = 1, arrayTwo = 2;
+
+   public SymbolTable tab;
+   public CodeGenerator gen;
+  
+/*-------------------------------------------------------------------------------------------*/
+
+CHARACTERS
+
+  cr  = '\r'.
+  lf  = '\n'.
+  tab = '\t'.
+  digit = "0123456789".
+  letter = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".
+  stringCh = ANY - '"' - '\\' - cr - lf - tab.
+  printableCh = '\u0020' .. '\u007e'.
+
+/*-------------------------------------------------------------------------------------------*/
+
+TOKENS
+
+  number = digit { digit }.
+  ident = letter { letter | digit }.
+  string = '"' {stringCh | '\\' printableCh} '"'.
+
+/*-------------------------------------------------------------------------------------------*/
+
+COMMENTS FROM "//" TO lf
+COMMENTS FROM "/*" TO "*/" NESTED
+
+/*-------------------------------------------------------------------------------------------*/
+
+IGNORE cr + lf + tab
+
+/*-------------------------------------------------------------------------------------------*/
+
+PRODUCTIONS
+
+AddOp<out Op op>
+=                        (. op = Op.ADD; .)
+  ( '+'
+  | '-'                  (. op = Op.SUB; .)
+  )
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Expr<out int reg,        // load value of Expr into register
+     out int type>       (. int typeR, regR; Op op; .)
+  = SimExpr<out reg,
+            out type>
+  [ RelOp<out op>
+    SimExpr<out regR,
+            out typeR>   (.
+                            if (type == typeR) {
+                               type = boolean;
+                               gen.RelOp(op, reg, regR);
+                            }
+                            else SemErr("incompatible types");
+                         .)
+   ]                     (. gen.ClearRegisters(); .)
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Primary<out int reg,     // load Primary into register
+        out int type>    (. int n; Obj obj; string name; Obj mObj=null; string mname; int mtype = undef;.)
+=                        (.
+                            type = undef;
+                            reg = gen.GetRegister();
+                         .)
+  ( Ident<out name>      (. int idxReg; int idxType; 
+			    obj = tab.Find(name); type = obj.type;
+  			 .)
+    [
+     ( '[' Expr<out idxReg,
+		out idxType>  (. int idx2Reg; int idx2Type;
+				if(obj.sort != arrayOne && obj.sort != arrayTwo)
+					SemErr("can only index arrays");
+				    else if(idxType != integer)
+					SemErr("can only index arrays by integers");
+				  .)
+
+
+              ( ']'	     (.  if (obj.kind == var || obj.kind == constant) {
+                               if (obj.level == 0)
+                                  gen.LoadIndexedGlobal(reg, obj.adr, idxReg, name);
+                               else
+                                  gen.LoadIndexedLocal(reg, tab.curLevel-obj.level, obj.adr, idxReg,  name);
+                               if (type == boolean)
+                               // reset Z flag in CPSR
+                                  gen.ResetZ(reg);
+                            }
+                            else SemErr("variable expected");	
+			         .) 
+		| ',' Expr<out idx2Reg,
+		out idx2Type> ']'  (. 	if(idxType != integer)
+						SemErr("can only index arrays by integers");
+				    	if (obj.kind == var || obj.kind == constant) {
+                               			if (obj.level == 0)
+                                  			gen.LoadTwoIndexedGlobal(reg, obj.adr, idxReg, idx2Reg, obj.arrSize, name);//TODO: Add index 2
+                               			else
+                                  			gen.LoadTwoIndexedLocal(reg, tab.curLevel-obj.level, obj.adr, idxReg, idx2Reg, obj.arrSize, name); //TODO Add index 2
+                               			if (type == boolean)
+                               				// reset Z flag in CPSR
+                                  			gen.ResetZ(reg);
+                            		}
+                            		else SemErr("variable expected");	
+			         .) 
+
+		)
+      | "." Ident<out mname>  (. mObj = tab.Find(mname); mtype = mObj.type;  .)
+      )
+    ]
+			 (. if(mObj==null){
+			     if(obj.sort == scalar){
+                              if (obj.kind == var || obj.kind == constant) {
+                               if (obj.level == 0)
+                                  gen.LoadGlobal(reg, obj.adr, name);
+                               else
+                                  gen.LoadLocal(reg, tab.curLevel-obj.level, obj.adr, name);
+                               if (mtype == boolean)
+                               // reset Z flag in CPSR
+                                  gen.ResetZ(reg);
+                              } else SemErr("variable expected");
+			     }
+			   } else if(mObj.parent == obj.name){
+				 if(mObj.sort == scalar){
+					type = mtype;
+                            	   if (mObj.kind == var || mObj.kind == constant) {
+                               		if (mObj.level == 0)
+                                  		gen.LoadGlobal(reg, mObj.adr, name);
+                               		else
+                                  		gen.LoadLocal(reg, tab.curLevel-mObj.level, mObj.adr, name);
+					Console.WriteLine("; ." + mObj.name);	
+                               	   	if (mtype == boolean)
+                               		// reset Z flag in CPSR
+                                	  gen.ResetZ(reg);
+                            	   } else SemErr("variable expected");
+				  }	
+			   } else
+				SemErr("Var not member of struct.");
+                        .)
+	        
+
+  | number               (.
+                            type = integer;
+                            n = Convert.ToInt32(t.val);
+                            gen.LoadConstant(reg, n);
+                         .)
+
+  | '-'
+    Primary<out reg,
+            out type>     (.
+                            if (type == integer)
+                               gen.NegateValue(reg);
+                            else SemErr("integer type expected");
+                         .)
+
+  | "true"               (.
+                               type = boolean;
+                               gen.LoadTrue(reg);
+                         .)
+
+  | "false"              (.
+                               type = boolean;
+                               gen.LoadFalse(reg);
+                         .)
+
+  | '('
+    Expr<out reg,
+         out type>
+    ')'
+
+  )
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Ident<out string name>
+= ident                  (. name = t.val; .)
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+String<out string text>
+= string                  (. text = t.val; .)
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+MulOp<out Op op>
+=                        (. op = Op.MUL; .)
+  ( '*'
+  | ("div" | "DIV")      (. op = Op.DIV; .)
+  | ("mod" | "MOD")      (. op = Op.MOD; .)
+  )
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+ProcDecl<string progName>
+                         (. Obj obj; string procName; .)
+= "void"
+  Ident<out procName>    (.
+                            obj = tab.NewObj(procName, proc, undef);
+                            if (procName == "main")
+                               if (tab.curLevel == 0)
+                                  tab.mainPresent = true;
+                               else SemErr("main not at lexic level 0");
+                            tab.OpenScope();
+                         .)
+  '(' ')'
+  '{'
+     {
+     (VarDecl)
+     }
+     {
+     ProcDecl<progName>
+     }                   (.
+                            if (procName == "main")
+                               gen.Label("Main", "Body");
+                            else {
+                               gen.ProcNameComment(procName);
+                               gen.Label(procName, "Body");
+                            }
+                         .)
+     { Stat | ConstDecl | VarDecl}
+  '}'                    (.
+                            if (procName == "main") {
+                               gen.StopProgram(progName);
+                               gen.Enter("Main", tab.curLevel, tab.topScope.nextAdr);
+                            } else {
+                               gen.Return(procName);
+                               gen.Enter(procName, tab.curLevel, tab.topScope.nextAdr);
+                            }
+                            tab.CloseScope();
+                         .)
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+RelOp<out Op op>
+=                        (. op = Op.EQU; .)
+  ( "="
+  | '<'                  (. op = Op.LSS; .)
+  | '>'                  (. op = Op.GTR; .)
+  | "!="                 (. op = Op.NEQ; .)
+  | "<="                 (. op = Op.LEQ; .)
+  | ">="                 (. op = Op.GEQ; .)
+  )
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+SimExpr<out int reg,     //load value of SimExpr into register
+        out int type>    (. int typeR, regR; Op op; .)
+= Term<out reg,
+       out type>
+  { AddOp<out op>
+    Term<out regR,
+         out typeR>      (.
+                            if (type == integer && typeR == integer)
+                               gen.AddOp(op, reg, regR);
+                            else SemErr("integer type expected");
+                         .)
+  }
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Stat                     (. int type; string name; Obj obj; int reg; string membername; .)
+= Ident<out name>        (. obj = tab.Find(name); 
+			
+			.)
+  ( ":="                 (. if(obj.parent != "")
+				SemErr("Cannot assign var to non-initialized variable. (Hint: " + obj.parent + " struct has " + name + " as a member variable.)");
+			    if(obj.kind==constant)
+				SemErr("Cannot assign a new val to a constant.");
+                            if (obj.kind != var)
+                               SemErr("cannot assign to procedure");
+                         .)
+   ( Expr<out reg,
+         out type>	 
+	(';'  		(.
+                            if (type == obj.type)
+                               if (obj.level == 0)
+                                  gen.StoreGlobal(reg, obj.adr, name);
+                               else gen.StoreLocal(reg, tab.curLevel-obj.level, obj.adr, name);
+                           else SemErr("incompatible types");
+                         .)
+	| '?'  		(.  int l1, l2; l1 = 0;
+                            if (type == boolean) {
+                               l1 = gen.NewLabel();
+                               gen.BranchFalse(l1);
+                            }
+                            else SemErr("boolean type expected");
+                         .)
+
+      Expr<out reg,
+	out type>        (.
+                            l2 = gen.NewLabel();
+                            gen.Branch(l2);
+                            gen.Label(l1);
+                         .)
+     ':' Expr<out reg,
+	out type>
+	               	 (. gen.Label(l2); .)
+	';'
+	)
+   )
+  | "." Ident<out membername> (. Obj mobj = tab.Find(membername); .) 
+	 ":="                 (. if(mobj.parent == "")
+			       	    SemErr("Var is not member of struct");
+				if(mobj.parent != obj.name)
+				    SemErr("Var is not member of struct");
+			    	if(obj.kind==constant)
+					SemErr("Cannot assign a new val to a constant.");
+                            	if (obj.kind != var)
+                               		SemErr("cannot assign to procedure");
+                         .)
+   ( Expr<out reg,
+         out type>	 
+	(';'  		(.
+                            if (type == mobj.type)
+                               if (mobj.level == 0)
+                                  gen.StoreGlobal(reg, mobj.adr, membername);
+                               else gen.StoreLocal(reg, tab.curLevel-mobj.level, mobj.adr, membername);
+                           else SemErr("incompatible types");
+                         .)
+	| '?'  		(.  int l1, l2; l1 = 0;
+                            if (type == boolean) {
+                               l1 = gen.NewLabel();
+                               gen.BranchFalse(l1);
+                            }
+                            else SemErr("boolean type expected");
+                         .)
+
+      Expr<out reg,
+	out type>        (.
+                            l2 = gen.NewLabel();
+                            gen.Branch(l2);
+                            gen.Label(l1);
+                         .)
+     ':' Expr<out reg,
+	out type>
+	               	 (. gen.Label(l2); .)
+	';'
+	)
+   )	
+
+
+
+ 
+  | '(' ')' ';'          (.
+                            if (obj.kind == proc)
+                               gen.Call(name);
+                            else SemErr("object is not a procedure");
+                         .)
+  |'[' 			(. 	int idxType; int idxReg;
+				if(obj.sort != arrayOne && obj.sort != arrayTwo)
+				SemErr("error can only index arrays.");
+			.) 
+   Expr<out idxReg, 
+	out idxType> 	(.int idx2Reg; int idx2Type; 
+			  if(idxType != integer)
+				SemErr("Array indexes must be integers");
+			.)
+	( ']'
+    	 ":="  
+   	  Expr<out reg,
+           	 out type>	 
+	 ';'  		(.
+                            if (type == obj.type)
+                               if (obj.level == 0)
+				  gen.StoreIndexedGlobal(reg, obj.adr, idxReg, name);
+                               else  gen.StoreIndexedLocal(reg, tab.curLevel-obj.level, obj.adr, idxReg, name);
+				//gen.StoreLocal(reg, tab.curLevel-obj.level, obj.adr, name);
+                           else SemErr("incompatible types");
+                         .)
+	|',' Expr<out idx2Reg, 
+		out idx2Type> ']'   
+    	 ":="  
+   	  Expr<out reg,
+           	 out type>	 
+	 ';'  		(.
+                            if (type == obj.type)
+                               if (obj.level == 0)
+				  gen.StoreTwoIndexedGlobal(reg, obj.adr, idxReg, idx2Reg, obj.arrSize, name);
+                               else  gen.StoreTwoIndexedLocal(reg, tab.curLevel-obj.level, obj.adr, idxReg, idx2Reg, obj.arrSize, name); //Add second index.
+				//gen.StoreLocal(reg, tab.curLevel-obj.level, obj.adr, name);
+                           else SemErr("incompatible types");
+                         .)
+	)
+
+  )
+
+|"switch"		(. int cReg, cType, vReg, vType, tReg;
+			   Console.WriteLine("; Switch statement:");
+			   gen.GetRegister();
+			   gen.GetRegister();
+			.)
+ Expr<out cReg,
+	out cType> "{"	(. if (cType != boolean && cType != integer) 
+			     SemErr("boolean or integer type expected");
+			   
+			   int endSwitchL = gen.NewLabel(); 
+			   int nextL = gen.NewLabel();
+			   int curL = 0;
+
+			.)
+{"case" Expr<out vReg,
+	out vType> ":"	(.
+			   if(vType != cType)
+			     SemErr("switch and case values are not the same type"); 
+			   curL = nextL;
+			   gen.Label(curL); 
+			   Console.WriteLine("; case");
+			   gen.GetRegister();
+			   tReg = gen.GetRegister(); 
+			   Console.WriteLine("; Use copy of the condition for each compare so the original isn't overwritten during the compare.");
+			   gen.MoveRegister(tReg, cReg); 
+			   gen.RelOp(Op.EQU, tReg, vReg);
+			   nextL = gen.NewLabel();
+			   gen.BranchFalse(nextL);
+			   int stmtL = gen.NewLabel();
+			   gen.BranchTrue(stmtL);
+
+			   gen.GetRegister();
+			   			.)
+ ["case" Expr<out vReg,
+	out vType> ":"]	(.
+			   if(vType != cType)
+			     SemErr("switch and case values are not the same type"); 
+			   curL = nextL;
+			   gen.Label(curL); 
+			   Console.WriteLine("; case consecutive");
+			   gen.GetRegister();
+			   tReg = gen.GetRegister(); 
+			   Console.WriteLine("; Use copy of the condition for each compare so the original isn't overwritten during the compare.");
+			   gen.MoveRegister(tReg, cReg); 
+			   gen.RelOp(Op.EQU, tReg, vReg);
+			   nextL = gen.NewLabel();
+			   gen.BranchFalse(nextL);
+			   gen.BranchTrue(stmtL);
+			   gen.GetRegister();
+
+			 .)
+    
+			(. gen.Label(stmtL);
+			   Console.WriteLine("; Statments start.");
+			  .)
+	{Stat}	         		
+	{"break" ";"}	(. 
+			   Console.WriteLine("; Break;");
+			   gen.Branch(endSwitchL);
+			.)	
+}			
+["default" ":"		(.
+			   curL = nextL;
+			   gen.Label(curL);
+			   Console.WriteLine("; Default case:"); 
+			.)
+
+			(. Console.WriteLine("; Statments start:"); .)
+	{Stat}
+	{"break" ";"}
+]
+"}"			(.
+			  gen.Label(endSwitchL); 
+			.)
+
+
+| "if"                   (. int l1, l2; l1 = 0; .)
+  Expr<out reg,
+       out type>         (.
+                            if (type == boolean) {
+                               l1 = gen.NewLabel();
+                               gen.BranchFalse(l1);
+                            }
+                            else SemErr("boolean type expected");
+                         .)
+      Stat               (.
+                            l2 = gen.NewLabel();
+                            gen.Branch(l2);
+                            gen.Label(l1);
+                         .)
+      [ "else"
+      Stat
+      ]               	 (. gen.Label(l2); .)
+
+
+| "while"                (.
+                            int l1, l2;
+                            l1 = gen.NewLabel();
+                            gen.Label(l1); l2=0;
+                         .)
+  Expr<out reg,
+       out type>         (.
+                            if (type == boolean) {
+                               l2 = gen.NewLabel();
+                               gen.BranchFalse(l2);
+                            }
+                            else SemErr("boolean type expected");
+                         .)
+   Stat                  (.
+                            gen.Branch(l1);
+                            gen.Label(l2);
+                         .)
+| "for" "("  Stat 	(.	Console.WriteLine("; For");
+				int l1, l2;
+				l1 = gen.NewLabel();
+				gen.Label(l1); l2=0;	
+			.)
+
+	Expr<out reg, 
+		out type> ";"  (.
+				Console.WriteLine("; Condition:");
+				if(type == boolean) {
+					l2 = gen.NewLabel();
+					gen.BranchFalse(l2);
+				}	
+				else SemErr("boolean type expected");
+			   .)
+
+	Stat  ")" 	(.	Console.WriteLine("; Inside For:");
+			 .)
+	  
+	Stat	 	(.
+				gen.Branch(l1);	
+				gen.Label(l2);
+				Console.WriteLine("; End For");
+
+			.)
+| "struct" Ident<out name>
+  "{"					(. Console.WriteLine("; Start Struct " + name);
+					   tab.NewObj(name, var, undef);	
+					 .) 
+  { 
+    Type<out type> 			(. string mname;  int size; .)
+    Ident<out mname>        
+    ( { ","         			(. tab.NewObj(mname, var, type, name); .)
+        Ident<out mname>    
+       } ";"                  		(. tab.NewObj(mname, var, type, name);
+					   Console.WriteLine("; Member " + mname); 		
+					 .)
+
+  
+    | '[' ArrDeclPart<out size>           (.   int totalSize = 0; 
+                            		        if(size<0) SemErr("array size must be > 0");
+						totalSize += size;  
+					.)
+
+      (',' ArrDeclPart<out size> "];"   (.
+						if(size<0) SemErr("array size must be > 0");
+					 	totalSize *= size; 
+						tab.NewObj(mname, var, type, arrayTwo, totalSize, size, name);
+					.)
+
+      | "];"		                  (.  tab.NewObj(mname, var, type, arrayOne, totalSize, size, name); 	
+      					      Console.WriteLine("; Member " + mname);
+					  .) 
+      )
+
+  )
+  }
+  "}"					(. Console.WriteLine("; End Struct"); .)	
+			
+
+| "read"
+  Ident<out name> ';'    (.
+                            obj = tab.Find(name);
+                            if (obj.type == integer) {
+                               gen.ReadInteger(); 
+                               if (obj.level == 0)
+                                  gen.StoreGlobal(0, obj.adr, name);
+                               else gen.StoreLocal(0, tab.curLevel-obj.level, obj.adr, name);
+                            }
+                            else SemErr("integer type expected");
+                         .)
+
+| "write"                (. string text; .)
+  (
+    Expr<out reg,
+         out type>       (.
+                            switch (type) {
+                               case integer: gen.WriteInteger(reg, false);
+                                             break; 
+                               case boolean: gen.WriteBoolean(false);
+                                             break;
+                            }
+                         .)
+  | String<out text>     (. gen.WriteString(text); .)
+  )
+  ';'
+
+| "writeln"
+  // note - for strings use write with \n in text
+  Expr<out reg,
+       out type>           (.
+                              switch (type) {
+                                 case integer: gen.WriteInteger(reg, true);
+                                               break;
+                                 case boolean: gen.WriteBoolean(true);
+                                               break;
+                              }
+                           .)
+  ';'
+
+| '{'                      (. tab.OpenSubScope(); .)
+  { VarDecl }
+  Stat { Stat }
+  '}'                      (. tab.CloseSubScope(); .)
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Tastier                  (. string progName; .)
+  = "program"
+  Ident<out progName>    (. tab.OpenScope(); .)
+  '{'
+    { VarDecl | ConstDecl}          // global variables
+    { ProcDecl<progName> }
+                         (. tab.CloseScope(); .)
+  '}'
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Term<out int reg,        // load value of Term into register
+     out int type>       (. int typeR, regR; Op op; .)
+  = Primary<out reg,
+            out type>
+  { MulOp<out op>
+    Primary<out regR,
+            out typeR>
+                         (.
+                            if (type == integer && typeR == integer)
+                               gen.MulOp(op, reg, regR);
+                            else SemErr("integer type expected");
+                         .)
+  }
+.
+
+/*-------------------------------------------------------------------------------------------*/
+
+Type<out int type>
+=                        (. type = undef; .)
+ ( "int"                 (. type = integer; .)
+ | "bool"                (. type = boolean; .)
+ )
+.
+
+/*-------------------------------------------------------------------------------------------*/
+ArrDeclPart<out int size>  (. size = 0; int type; .)
+= "1.." 
+    number		(. size = Convert.ToInt32(t.val); .)
+    	
+.
+
+
+VarDecl                  (. string name; int type; int size; .)
+= Type<out type>
+  Ident<out name>        
+  ( { ","                (. tab.NewObj(name, var, type); .)
+      Ident<out name>    
+    } ";"                  (. tab.NewObj(name, var, type); .)
+
+  
+  | '[' ArrDeclPart<out size>           (.   int totalSize = 0; 
+                            		        if(size<0) SemErr("array size must be > 0");
+						totalSize += size;  
+					.)
+
+      (',' ArrDeclPart<out size> "];"   (.
+						if(size<0) SemErr("array size must be > 0");
+					 	totalSize *= size; 
+						tab.NewObj(name, var, type, arrayTwo, totalSize, size);
+					.)
+
+      | "];"		                  (.  tab.NewObj(name, var, type, arrayOne, totalSize, size); .)	
+      ) 
+
+  )
+.
+
+ConstDecl                 (. int type; string name; Obj obj; int reg; .)
+= "const"
+ Ident<out name>   "="
+ Expr<out reg,
+	out type> ';'   (. 
+			  tab.NewObj(name, constant, type);
+			  obj = tab.Find(name); 
+                           if (obj.kind != constant)
+                              SemErr("cannot do const assign to non constant");
+
+                           if (type == obj.type)
+                              if (obj.level == 0)
+                                 gen.StoreGlobal(reg, obj.adr, name);
+                              else gen.StoreLocal(reg, tab.curLevel-obj.level, obj.adr, name);
+                           else SemErr("incompatible types");
+                        .)
+.
+
+
+END Tastier.

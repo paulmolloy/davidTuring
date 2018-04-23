@@ -1,0 +1,40 @@
+// program to read integer values n (n > 0) from the console
+// and, for each one, print the sum of the values from 1 to n
+
+program Test {
+
+  int i;
+  void SumUp(){
+    i:= 1;
+    write "Printing a test value";
+
+
+  } 
+  void main() {
+      int b;
+      b:= 0;
+      int c;
+      c:= 4;
+
+
+      struct person {
+        int surname;
+        int age;
+	bool isrighthanded;
+
+      }
+      person.surname :=1;
+      //surname :=1; 
+      b := person.surname + 10; 
+
+      int i;
+      for(
+	i:=0;
+	i<c; 
+	i:=1;
+	){
+	b:= b+1;	
+      }
+
+   }
+}
